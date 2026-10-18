@@ -1,0 +1,6 @@
+{
+  "name": "ScheduleFlow",
+  "description": "A SaaS multi-user scheduling application with Google Calendar sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

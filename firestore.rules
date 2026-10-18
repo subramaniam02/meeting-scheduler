@@ -1,0 +1,142 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    // Entity validation functions
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['id', 'email', 'displayName']) &&
+             data.keys().hasOnly(['id', 'email', 'displayName', 'handle', 'photoURL', 'timezone', 'bio', 'createdAt', 'updatedAt']) &&
+             data.id is string && data.id.size() <= 128 &&
+             data.email is string && data.email.size() <= 256 &&
+             data.displayName is string && data.displayName.size() <= 128 &&
+             (!('handle' in data) || (data.handle is string && data.handle.size() <= 64)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1000)) &&
+             (!('timezone' in data) || (data.timezone is string && data.timezone.size() <= 64)) &&
+             (!('bio' in data) || (data.bio is string && data.bio.size() <= 500));
+    }
+
+    function isValidHostSettings(data, userId) {
+      return data.keys().hasAll(['userId', 'singleBookingPerGuest', 'maxMeetingDurationMinutes']) &&
+             data.keys().hasOnly(['userId', 'singleBookingPerGuest', 'maxMeetingDurationMinutes', 'defaultBufferMinutes', 'tagConstraints', 'weeklySchedule', 'updatedAt']) &&
+             data.userId == userId &&
+             data.singleBookingPerGuest is bool &&
+             data.maxMeetingDurationMinutes is number &&
+             data.maxMeetingDurationMinutes >= 15 && data.maxMeetingDurationMinutes <= 480;
+    }
+
+    function isValidMeetingType(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'durationMinutes', 'tag', 'isActive']) &&
+             data.keys().hasOnly(['id', 'userId', 'title', 'description', 'durationMinutes', 'tag', 'color', 'isActive', 'requiresGoogleLogin', 'createdAt', 'updatedAt']) &&
+             data.userId == userId &&
+             data.id is string && data.id.size() <= 128 &&
+             data.title is string && data.title.size() <= 128 &&
+             data.durationMinutes is number && data.durationMinutes >= 5 && data.durationMinutes <= 480 &&
+             data.tag is string && data.tag.size() <= 64 &&
+             data.isActive is bool;
+    }
+
+    function isValidBooking(data, userId) {
+      return data.keys().hasAll(['id', 'hostId', 'guestEmail', 'guestUid', 'startTime', 'endTime', 'status', 'tag']) &&
+             data.keys().hasOnly(['id', 'hostId', 'guestEmail', 'guestName', 'guestUid', 'meetingTypeId', 'meetingTitle', 'tag', 'startTime', 'endTime', 'durationMinutes', 'status', 'googleEventId', 'googleMeetLink', 'notes', 'createdAt', 'updatedAt']) &&
+             data.hostId == userId &&
+             data.id is string && data.id.size() <= 128 &&
+             data.guestUid == request.auth.uid &&
+             data.guestEmail is string && data.guestEmail.size() <= 256 &&
+             data.startTime is string && data.startTime.size() <= 64 &&
+             data.endTime is string && data.endTime.size() <= 64 &&
+             data.status in ['confirmed', 'cancelled', 'rescheduled'] &&
+             data.tag is string && data.tag.size() <= 64 &&
+             (!('durationMinutes' in data) || (data.durationMinutes is number && data.durationMinutes >= 5 && data.durationMinutes <= 480)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000));
+    }
+
+    // Match rules for /users/{userId}
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if false; // Disallow scraping entire users collection
+      allow create: if isOwner(userId) && isValidId(userId) &&
+                       isValidUserProfile(incoming()) && incoming().id == userId;
+      allow update: if isOwner(userId) && isValidId(userId) &&
+                       isValidUserProfile(incoming()) && incoming().id == userId &&
+                       incoming().id == existing().id;
+      allow delete: if false;
+
+      // Settings subcollection
+      match /settings/{settingId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(settingId);
+        allow list: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidId(userId) && isValidId(settingId) &&
+                                 settingId == 'general' &&
+                                 isValidHostSettings(incoming(), userId);
+        allow delete: if false;
+      }
+
+      // Meeting types subcollection
+      match /meetingTypes/{typeId} {
+        // Authenticated users can view active meeting types to book
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(typeId);
+        allow list: if isSignedIn() && isValidId(userId);
+        allow create: if isOwner(userId) && isValidId(userId) && isValidId(typeId) &&
+                         isValidMeetingType(incoming(), userId) && incoming().id == typeId;
+        allow update: if isOwner(userId) && isValidId(userId) && isValidId(typeId) &&
+                         isValidMeetingType(incoming(), userId) && incoming().id == existing().id;
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(typeId);
+      }
+
+      // Bookings subcollection
+      match /bookings/{bookingId} {
+        // Host can view all their bookings; Guest can view their own booking
+        allow get: if isVerified() && isValidId(userId) && isValidId(bookingId) &&
+                      (request.auth.uid == userId || resource.data.guestUid == request.auth.uid);
+
+        // Host can list all bookings; Guest can query their own bookings
+        allow list: if isVerified() && isValidId(userId) &&
+                       (request.auth.uid == userId || resource.data.guestUid == request.auth.uid);
+
+        // Verified guest or host can create a booking
+        allow create: if isVerified() && isValidId(userId) && isValidId(bookingId) &&
+                         isValidBooking(incoming(), userId) && incoming().id == bookingId;
+
+        // Either host or guest can update status (e.g. cancellation)
+        allow update: if isVerified() && isValidId(userId) && isValidId(bookingId) &&
+                         (request.auth.uid == userId || resource.data.guestUid == request.auth.uid) &&
+                         incoming().id == existing().id &&
+                         incoming().hostId == existing().hostId &&
+                         incoming().guestUid == existing().guestUid &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'notes', 'googleEventId', 'googleMeetLink']);
+
+        // Only host can delete a booking
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(bookingId);
+      }
+    }
+  }
+}

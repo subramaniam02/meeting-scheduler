@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public and account profile for scheduling hosts and users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user ID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Display name of the host" },
+        "handle": { "type": "string", "description": "Unique username or booking URL slug" },
+        "photoURL": { "type": "string", "description": "Avatar image URL" },
+        "timezone": { "type": "string", "description": "User primary timezone" },
+        "bio": { "type": "string", "description": "Short bio or welcome message" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of account creation" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last update" }
+      },
+      "required": ["id", "email", "displayName"]
+    },
+    "HostSettings": {
+      "title": "HostSettings",
+      "description": "Availability preferences and constraint configurations for a host",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "ID of the host owner" },
+        "singleBookingPerGuest": { "type": "boolean", "description": "Restrict each guest to at most 1 active slot" },
+        "maxMeetingDurationMinutes": { "type": "number", "description": "Maximum allowed duration in minutes up to 480" },
+        "defaultBufferMinutes": { "type": "number", "description": "Buffer time in minutes between consecutive calls" },
+        "tagConstraints": { "type": "object", "description": "Per-tag constraints such as daily limits and time restrictions" },
+        "weeklySchedule": { "type": "object", "description": "Working hours defined per day of week" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last configuration update" }
+      },
+      "required": ["userId", "singleBookingPerGuest", "maxMeetingDurationMinutes"]
+    },
+    "MeetingType": {
+      "title": "MeetingType",
+      "description": "Configurable meeting service offered by the host",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique meeting type ID" },
+        "userId": { "type": "string", "description": "Host owner ID" },
+        "title": { "type": "string", "description": "Title of the meeting" },
+        "description": { "type": "string", "description": "Details about what the call covers" },
+        "durationMinutes": { "type": "number", "description": "Duration in minutes up to 480 (8 hours)" },
+        "tag": { "type": "string", "description": "Meeting tag such as interview, screening, general" },
+        "color": { "type": "string", "description": "Hex accent color for calendar display" },
+        "isActive": { "type": "boolean", "description": "Whether this meeting type accepts new bookings" },
+        "requiresGoogleLogin": { "type": "boolean", "description": "Always true for verified schedulers" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of creation" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of update" }
+      },
+      "required": ["id", "userId", "title", "durationMinutes", "tag", "isActive"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Scheduled call booked with a host",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique booking ID" },
+        "hostId": { "type": "string", "description": "Host user ID" },
+        "guestEmail": { "type": "string", "description": "Verified guest email address" },
+        "guestName": { "type": "string", "description": "Verified guest display name" },
+        "guestUid": { "type": "string", "description": "Firebase UID of verified guest" },
+        "meetingTypeId": { "type": "string", "description": "Reference to meeting type" },
+        "meetingTitle": { "type": "string", "description": "Title of the scheduled meeting" },
+        "tag": { "type": "string", "description": "Meeting tag for constraint enforcement (e.g. interview)" },
+        "startTime": { "type": "string", "description": "ISO timestamp of slot start" },
+        "endTime": { "type": "string", "description": "ISO timestamp of slot end" },
+        "durationMinutes": { "type": "number", "description": "Duration of call in minutes (up to 480)" },
+        "status": { "type": "string", "description": "Status: confirmed, cancelled, completed" },
+        "googleEventId": { "type": "string", "description": "Created Google Calendar Event ID" },
+        "googleMeetLink": { "type": "string", "description": "Google Meet video conference link" },
+        "notes": { "type": "string", "description": "Optional notes or agenda provided by guest" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of booking creation" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of booking update" }
+      },
+      "required": ["id", "hostId", "guestEmail", "guestUid", "startTime", "endTime", "status", "tag"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User and host profile document"
+    },
+    "/users/{userId}/settings/general": {
+      "schema": { "$ref": "#/entities/HostSettings" },
+      "description": "Host availability and constraint settings"
+    },
+    "/users/{userId}/meetingTypes/{typeId}": {
+      "schema": { "$ref": "#/entities/MeetingType" },
+      "description": "Host's available meeting types"
+    },
+    "/users/{userId}/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/Booking" },
+      "description": "Scheduled appointments booked with the host"
+    }
+  }
+}
