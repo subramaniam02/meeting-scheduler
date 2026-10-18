@@ -4,7 +4,10 @@ import {
   signInWithGoogle,
   logOut,
   getCachedAccessToken,
+  getCurrentIdToken,
 } from './lib/firebase';
+import { getCalendarStatus, calendarConnectUrl } from './lib/apiClient';
+import { listHostBookings } from './lib/firestoreService';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import type {
   HostSettings,
@@ -69,6 +72,8 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isCalendarSyncing, setIsCalendarSyncing] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [calendarInviteConnected, setCalendarInviteConnected] = useState(false);
+  const [calendarNotice, setCalendarNotice] = useState<string | null>(null);
 
   // Check URL hash for shared schedule payload (#s=...)
   useEffect(() => {
@@ -92,6 +97,23 @@ export default function App() {
         setActiveTab('preview');
       }
     }
+  }, []);
+
+  // Handle the return from the host calendar-connect OAuth flow.
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.includes('calendar=')) return;
+    if (hash.includes('calendar=connected')) {
+      setCalendarInviteConnected(true);
+      setCalendarNotice(
+        'Google Calendar connected — guests who book will now receive email invites automatically.'
+      );
+    } else {
+      setCalendarNotice(
+        'Calendar connection did not complete. Please try connecting again to enable email invites.'
+      );
+    }
+    window.history.replaceState(null, '', window.location.pathname);
   }, []);
 
   // Sync Google Calendar Commitments
@@ -132,6 +154,30 @@ export default function App() {
           return updated;
         });
         await syncGoogleCalendar();
+
+        // Pull bookings persisted by the backend so the host sees meetings
+        // booked through their public link (not just this browser).
+        try {
+          const remote = await listHostBookings(user.uid);
+          if (remote.length) {
+            setBookings((prev) => {
+              const byId = new Map(prev.map((b) => [b.id, b]));
+              for (const b of remote) byId.set(b.id, b);
+              return Array.from(byId.values());
+            });
+          }
+        } catch (err) {
+          console.warn('Could not load remote bookings:', err);
+        }
+
+        // Check whether the host has connected their calendar for invites.
+        try {
+          const idToken = await user.getIdToken();
+          const status = await getCalendarStatus(idToken);
+          setCalendarInviteConnected(status.connected);
+        } catch (err) {
+          console.warn('Could not check calendar connection:', err);
+        }
       } else {
         setCurrentUser(null);
       }
@@ -236,11 +282,35 @@ export default function App() {
     setIsShareModalOpen(true);
   };
 
+  // Connect the host's Google Calendar for OFFLINE access so the backend can
+  // create events and email invites whenever a guest books.
+  const handleConnectCalendar = async () => {
+    setErrorNotice(null);
+    let idToken = await getCurrentIdToken();
+    if (!idToken) {
+      try {
+        await signInWithGoogle();
+        idToken = await getCurrentIdToken();
+      } catch (err: any) {
+        setErrorNotice(err.message || 'Please sign in to connect your calendar.');
+        return;
+      }
+    }
+    if (!idToken) {
+      setErrorNotice('Please sign in to connect your calendar.');
+      return;
+    }
+    window.location.href = calendarConnectUrl(idToken);
+  };
+
   const isSharedLink = !!sharedSchedule;
   const activeProfile = sharedSchedule ? sharedSchedule.profile : hostProfile;
   const activeSettings = sharedSchedule ? sharedSchedule.settings : hostSettings;
   const activeMeetingTypes = sharedSchedule ? sharedSchedule.meetingTypes : meetingTypes;
   const activeCommitments = sharedSchedule ? sharedSchedule.commitments : calendarCommitments;
+  // The host identity used for backend booking + invites: the shared link's
+  // embedded UID for guests, or the signed-in host's own UID in preview.
+  const activeHostId = sharedSchedule ? sharedSchedule.profile.id : currentUser?.uid || hostProfile.id;
 
   return (
     <div className="min-h-screen bg-slate-50 text-gray-900 flex flex-col font-sans">
@@ -315,6 +385,38 @@ export default function App() {
           </div>
         )}
 
+        {calendarNotice && (
+          <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-800 flex items-center justify-between">
+            <span>{calendarNotice}</span>
+            <button
+              onClick={() => setCalendarNotice(null)}
+              className="text-emerald-600 hover:text-emerald-800 font-bold"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Prompt the signed-in host to connect their calendar for invites. */}
+        {!isSharedLink && currentUser && !calendarInviteConnected && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Connect your Google Calendar to send invites.</strong> Until you do,
+                guests who book through your link won't generate a calendar event or email invite
+                for you.
+              </span>
+            </div>
+            <button
+              onClick={handleConnectCalendar}
+              className="shrink-0 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
+            >
+              Connect Calendar
+            </button>
+          </div>
+        )}
+
         {/* View 1: Host Dashboard */}
         {activeTab === 'dashboard' && !isSharedLink && (
           <HostDashboard
@@ -350,6 +452,7 @@ export default function App() {
         {(activeTab === 'preview' || isSharedLink) && (
           <PublicBookingPage
             hostProfile={activeProfile}
+            hostId={activeHostId}
             hostSettings={activeSettings}
             meetingTypes={activeMeetingTypes}
             existingBookings={bookings}
@@ -369,6 +472,7 @@ export default function App() {
         meetingTypes={meetingTypes}
         calendarCommitments={calendarCommitments}
         onPreview={() => setActiveTab('preview')}
+        hostUid={currentUser?.uid}
       />
 
       {/* Footer */}

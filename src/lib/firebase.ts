@@ -96,6 +96,19 @@ export const getCachedAccessToken = (): string | null => {
   return cachedAccessToken;
 };
 
+// Fresh Firebase ID token for the signed-in user, used to authenticate
+// requests to the backend (e.g. connecting the host's calendar).
+export const getCurrentIdToken = async (): Promise<string | null> => {
+  const user = auth.currentUser;
+  if (!user) return null;
+  try {
+    return await user.getIdToken();
+  } catch (error) {
+    console.warn('Failed to get ID token:', error);
+    return null;
+  }
+};
+
 export const setCachedAccessToken = (token: string | null) => {
   cachedAccessToken = token;
 };

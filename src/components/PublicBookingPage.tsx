@@ -26,12 +26,13 @@ import type { LocalHostProfile } from '../lib/storage';
 import { computeAvailableSlots, checkGuestBookingEligibility } from '../lib/constraintEngine';
 import { GoogleSignInButton } from './GoogleSignInButton';
 import { CaptchaVerification } from './CaptchaVerification';
-import { signInWithGoogle, getCachedAccessToken } from '../lib/firebase';
-import { createGoogleCalendarEvent } from '../lib/calendarService';
+import { signInWithGoogle, getCurrentIdToken } from '../lib/firebase';
+import { submitBooking, ApiError } from '../lib/apiClient';
 import { getGoogleCalendarUrl, downloadIcsFile } from '../lib/calendarInvite';
 
 interface PublicBookingPageProps {
   hostProfile: LocalHostProfile;
+  hostId: string;
   hostSettings: HostSettings;
   meetingTypes: MeetingType[];
   existingBookings: Booking[];
@@ -46,6 +47,7 @@ interface PublicBookingPageProps {
 
 export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
   hostProfile,
+  hostId,
   hostSettings,
   meetingTypes,
   existingBookings,
@@ -77,6 +79,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
   const [isBooking, setIsBooking] = useState(false);
   const [bookingSuccess, setBookingSuccess] = useState<Booking | null>(null);
   const [bookingError, setBookingError] = useState<string | null>(null);
+  const [inviteStatus, setInviteStatus] = useState<string | null>(null);
 
   // Check guest single-slot eligibility
   const effectiveEmail = currentUser?.email || guestEmailInput.trim();
@@ -203,43 +206,73 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
 
     setIsBooking(true);
     setBookingError(null);
+    setInviteStatus(null);
+
+    const startTimeIso = selectedSlot.start.toISOString();
+    const endTimeIso = selectedSlot.end.toISOString();
+    const tagConstraint = hostSettings.tagConstraints?.[selectedMeetingType.tag.toLowerCase()];
 
     try {
-      const bookingId = `book-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      const startTimeIso = selectedSlot.start.toISOString();
-      const endTimeIso = selectedSlot.end.toISOString();
+      // Create the booking server-side. The backend persists it under the
+      // host and — if the host has connected their calendar — creates the
+      // calendar event and emails invites to both parties.
+      const idToken = (await getCurrentIdToken()) || undefined;
+      const result = await submitBooking({
+        hostId,
+        hostEmail: hostProfile.email || undefined,
+        hostName: hostProfile.displayName,
+        guestEmail,
+        guestName,
+        guestUid: currentUser?.uid,
+        idToken,
+        meetingTypeId: selectedMeetingType.id,
+        meetingTitle: selectedMeetingType.title,
+        tag: selectedMeetingType.tag,
+        description: selectedMeetingType.description,
+        startTime: startTimeIso,
+        endTime: endTimeIso,
+        durationMinutes: selectedMeetingType.durationMinutes,
+        notes: guestNotes.trim() || undefined,
+        constraints: {
+          singleBookingPerGuest: hostSettings.singleBookingPerGuest,
+          maxPerDayForTag: tagConstraint?.maxPerDay,
+        },
+      });
 
-      let googleEventId: string | undefined = undefined;
-      let googleMeetLink: string | undefined = undefined;
+      const booking: Booking = {
+        ...result.booking,
+        googleMeetLink: result.booking.googleMeetLink || 'https://meet.google.com/new',
+      };
 
-      // If host's Google Calendar is connected in this session, sync directly
-      const accessToken = getCachedAccessToken();
-      if (accessToken) {
-        try {
-          const calResult = await createGoogleCalendarEvent(accessToken, {
-            title: selectedMeetingType.title,
-            description: selectedMeetingType.description,
-            startTime: startTimeIso,
-            endTime: endTimeIso,
-            guestEmail,
-            guestName,
-            tag: selectedMeetingType.tag,
-          });
-          googleEventId = calResult.eventId;
-          googleMeetLink = calResult.meetLink;
-        } catch (calErr) {
-          console.warn('Direct calendar sync notice:', calErr);
-        }
+      try {
+        confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
+      } catch (e) {
+        // Safe fallback
       }
 
-      if (!googleMeetLink) {
-        // Universal instant Google Meet link
-        googleMeetLink = `https://meet.google.com/new`;
+      setInviteStatus(
+        result.invitesSent
+          ? `A calendar invite has been emailed to you and ${hostProfile.displayName}.`
+          : 'Your meeting is confirmed. The host has not connected their calendar yet, so add it to your own calendar below.'
+      );
+      setBookingSuccess(booking);
+      onBookingCreated(booking);
+    } catch (err: any) {
+      // A validation/conflict error from the backend is a real rejection.
+      if (err instanceof ApiError) {
+        console.warn('Booking rejected:', err.message);
+        setBookingError(err.message);
+        setIsBooking(false);
+        return;
       }
 
-      const newBooking: Booking = {
-        id: bookingId,
-        hostId: hostProfile.id,
+      // Otherwise the backend is unreachable (e.g. local preview without the
+      // server running). Fall back to a client-only confirmation so the flow
+      // still works, but make clear invites could not be sent.
+      console.warn('Backend unavailable, using local fallback:', err);
+      const fallback: Booking = {
+        id: `book-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        hostId,
         guestEmail,
         guestName,
         guestUid: currentUser?.uid || `guest_${Math.random().toString(36).substring(2, 9)}`,
@@ -250,28 +283,23 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
         endTime: endTimeIso,
         durationMinutes: selectedMeetingType.durationMinutes,
         status: 'confirmed',
-        googleEventId,
-        googleMeetLink,
+        googleMeetLink: 'https://meet.google.com/new',
         notes: guestNotes.trim() || undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
 
       try {
-        confetti({
-          particleCount: 90,
-          spread: 70,
-          origin: { y: 0.6 },
-        });
+        confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
       } catch (e) {
         // Safe fallback
       }
 
-      setBookingSuccess(newBooking);
-      onBookingCreated(newBooking);
-    } catch (err: any) {
-      console.error('Booking failed:', err);
-      setBookingError(err.message || 'An error occurred while booking. Please try again.');
+      setInviteStatus(
+        'Preview booking only — the scheduling server is not reachable, so no invite email was sent. Use the buttons below to add it to your calendar.'
+      );
+      setBookingSuccess(fallback);
+      onBookingCreated(fallback);
     } finally {
       setIsBooking(false);
     }
@@ -335,6 +363,12 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
               Your meeting is locked in. Add it to your calendar or join the video call below.
             </p>
           </div>
+
+          {inviteStatus && (
+            <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 max-w-md mx-auto">
+              {inviteStatus}
+            </div>
+          )}
 
           {/* Details Card */}
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-left space-y-4">

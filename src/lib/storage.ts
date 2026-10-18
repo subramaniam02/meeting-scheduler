@@ -214,7 +214,8 @@ export function encodeShareableSchedule(
   profile: LocalHostProfile,
   settings: HostSettings,
   meetingTypes: MeetingType[],
-  commitments: { start: string; end: string; tag?: string }[] = []
+  commitments: { start: string; end: string; tag?: string }[] = [],
+  hostUid?: string
 ): string {
   const payload = {
     p: {
@@ -222,6 +223,9 @@ export function encodeShareableSchedule(
       e: profile.email,
       z: profile.timezone,
       b: profile.bio,
+      // Firebase UID of the host, so the backend can locate their calendar
+      // credentials and send invites when a guest books via this link.
+      uid: hostUid || '',
     },
     s: {
       s: settings.singleBookingPerGuest,
@@ -266,7 +270,9 @@ export function decodeShareableSchedule(encoded: string): {
     const payload = JSON.parse(json);
 
     const profile: LocalHostProfile = {
-      id: 'shared_host',
+      // Prefer the host's real Firebase UID (needed for backend invites);
+      // fall back to a placeholder for legacy links.
+      id: payload.p?.uid || 'shared_host',
       displayName: payload.p?.n || 'Host',
       email: payload.p?.e || '',
       timezone: payload.p?.z || 'UTC',

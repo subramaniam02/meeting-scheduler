@@ -12,6 +12,7 @@ interface ShareLinkModalProps {
   meetingTypes: MeetingType[];
   calendarCommitments: CalendarCommitment[];
   onPreview: () => void;
+  hostUid?: string;
 }
 
 export const ShareLinkModal: React.FC<ShareLinkModalProps> = ({
@@ -22,6 +23,7 @@ export const ShareLinkModal: React.FC<ShareLinkModalProps> = ({
   meetingTypes,
   calendarCommitments,
   onPreview,
+  hostUid,
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -38,7 +40,8 @@ export const ShareLinkModal: React.FC<ShareLinkModalProps> = ({
     userProfile,
     hostSettings,
     meetingTypes,
-    busySlices
+    busySlices,
+    hostUid
   );
 
   const baseUrl = window.location.origin + window.location.pathname;

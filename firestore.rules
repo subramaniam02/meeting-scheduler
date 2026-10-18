@@ -112,6 +112,14 @@ service cloud.firestore {
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(typeId);
       }
 
+      // Private subcollection: host's stored Google Calendar refresh token.
+      // No client may ever read or write this — it is written and read only
+      // by the backend via the Admin SDK (which bypasses these rules). The
+      // global default-deny already blocks it; this makes the intent explicit.
+      match /private/{docId} {
+        allow read, write: if false;
+      }
+
       // Bookings subcollection
       match /bookings/{bookingId} {
         // Host can view all their bookings; Guest can view their own booking
